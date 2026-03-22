@@ -5,10 +5,16 @@
  * Consumers read from HandTracker.hands directly in their animation loops.
  */
 
-import {
-  FilesetResolver,
-  HandLandmarker,
-} from "@mediapipe/tasks-vision";
+// Dynamic CDN import — avoids @mediapipe/tasks-vision's broken npm exports map
+// and works reliably in HF Spaces iframes (same approach as award-winning arpeggiator Space)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _mediapipe: any = null;
+
+async function loadMediaPipe() {
+  if (_mediapipe) return _mediapipe;
+  _mediapipe = await import(/* @vite-ignore */ "https://esm.sh/@mediapipe/tasks-vision@0.10.14");
+  return _mediapipe;
+}
 
 export interface HandLandmark {
   x: number;
@@ -31,7 +37,8 @@ export class HandTracker {
   public hands: TrackedHand[] = [];
 
   private subscribers: LandmarkSubscriber[] = [];
-  private handLandmarker: HandLandmarker | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private handLandmarker: any = null;
   private video: HTMLVideoElement | null = null;
   private rafId: number | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,8 +60,10 @@ export class HandTracker {
   async init(videoElement: HTMLVideoElement): Promise<void> {
     this.video = videoElement;
 
+    const { FilesetResolver, HandLandmarker } = await loadMediaPipe();
+
     const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
     );
 
     this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
@@ -128,7 +137,8 @@ export class HandTracker {
       const newHands: TrackedHand[] = [];
       if (results.landmarks) {
         for (const handLandmarks of results.landmarks) {
-          const landmarks: HandLandmark[] = handLandmarks.map((lm) => ({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const landmarks: HandLandmark[] = handLandmarks.map((lm: any) => ({
             x: lm.x,
             y: lm.y,
             z: lm.z,
