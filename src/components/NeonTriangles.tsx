@@ -3,7 +3,7 @@ import { useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import NeonTriangle from './NeonTriangle'
 import type { HandTracker } from '../vision/HandTracker'
-import type { AudioEngine } from '../audio/AudioEngine'
+import { useAppStore } from '../store/useAppStore'
 
 const COLORS: [number, number, number][] = [
   [0, 2, 2],   // cyan
@@ -14,10 +14,14 @@ const COLORS: [number, number, number][] = [
 
 const LERP_FACTOR = 0.3
 
+interface AudioLike {
+  getAmplitude(): number;
+}
+
 interface NeonTrianglesProps {
   amplitudeRef: React.RefObject<number>
   trackerRef: React.RefObject<HandTracker | null>
-  audioRef: React.RefObject<AudioEngine | null>
+  audioRef: React.RefObject<AudioLike | null>
 }
 
 interface TriangleData {
@@ -35,13 +39,16 @@ export default function NeonTriangles({ amplitudeRef, trackerRef, audioRef }: Ne
     { visible: false, points: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
   ])
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
     const tracker = trackerRef.current
     const audio = audioRef.current
+    const attractMode = useAppStore.getState().attractMode
 
-    // Update amplitude from audio engine
-    if (audio && 'getAmplitude' in audio && typeof (audio as { getAmplitude: () => number }).getAmplitude === 'function') {
-      amplitudeRef.current = (audio as { getAmplitude: () => number }).getAmplitude()
+    // Update amplitude: real audio or attract mode sine wave
+    if (attractMode) {
+      amplitudeRef.current = 0.1 * (0.5 + 0.5 * Math.sin(clock.elapsedTime * 2.0))
+    } else if (audio) {
+      amplitudeRef.current = audio.getAmplitude()
     }
 
     const hands = tracker?.hands ?? []

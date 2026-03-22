@@ -20,6 +20,8 @@ type DrumZone = 'kick' | 'snare' | 'hihat' | null;
 export class AudioEngine {
   // Master bus
   private compressor: Tone.Compressor | null = null;
+  private delay: Tone.FeedbackDelay | null = null;
+  private reverb: Tone.Reverb | null = null;
   private limiter: Tone.Limiter | null = null;
   private meter: Tone.Meter | null = null;
 
@@ -53,11 +55,17 @@ export class AudioEngine {
       release: 0.25,
       knee: 30,
     });
+    this.delay = new Tone.FeedbackDelay("8n", 0.3);
+    this.delay.wet.value = 0.2;
+    this.reverb = new Tone.Reverb(1.5);
+    this.reverb.wet.value = 0.3;
     this.limiter = new Tone.Limiter(-2);
     this.meter = new Tone.Meter({ normalRange: true });
 
-    // Chain: compressor → limiter → destination
-    this.compressor.connect(this.limiter);
+    // Chain: compressor → delay → reverb → limiter → destination
+    this.compressor.connect(this.delay);
+    this.delay.connect(this.reverb);
+    this.reverb.connect(this.limiter);
     this.limiter.connect(Tone.getDestination());
     this.limiter.connect(this.meter);
 
@@ -149,7 +157,8 @@ export class AudioEngine {
     // Voice 1: Pluck — controlled by hands[0]
     if (hands[0] && this.pluck) {
       const area = hands[0].triangleArea;
-      this.pluck.dampening = 200 + area * 78000;
+      // Area is ~0.001-0.05 for normalized coords; scale to 200-8000 Hz range
+      this.pluck.dampening = 200 + Math.min(area * 160000, 7800);
 
       if (now - this.lastPluckTime > 100) {
         const midi = quantize(1 - hands[0].landmarks[8].y, scaleMode);
@@ -229,6 +238,10 @@ export class AudioEngine {
 
     this.compressor?.dispose();
     this.compressor = null;
+    this.delay?.dispose();
+    this.delay = null;
+    this.reverb?.dispose();
+    this.reverb = null;
     this.limiter?.dispose();
     this.limiter = null;
     this.meter?.dispose();

@@ -5,11 +5,14 @@ import { useRef } from 'react'
 import HyperbolicBackground from './HyperbolicBackground'
 import NeonTriangles from './NeonTriangles'
 import type { HandTracker } from '../vision/HandTracker'
-import type { AudioEngine } from '../audio/AudioEngine'
+
+interface AudioLike {
+  getAmplitude(): number;
+}
 
 interface VisualizerProps {
   trackerRef?: React.RefObject<HandTracker | null>
-  audioRef?: React.RefObject<AudioEngine | null>
+  audioRef?: React.RefObject<AudioLike | null>
 }
 
 export default function Visualizer({ trackerRef, audioRef }: VisualizerProps) {
