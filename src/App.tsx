@@ -1,27 +1,23 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
+import { HandTrackerProvider, useHandTracker } from './components/HandTrackerProvider';
 import Visualizer from './components/Visualizer';
 import UIOverlay from './components/UIOverlay';
 import AttractMode from './components/AttractMode';
 import { AudioEngine } from './audio/AudioEngine';
-import { HandTracker } from './vision/HandTracker';
 import type { TrackedHand } from './vision/HandTracker';
 import './App.css';
 
-/**
- * Expected AudioEngine interface — the actual class will implement these methods.
- * Using this interface lets App.tsx compile before AudioEngine is fully implemented.
- */
 interface AudioEngineAPI {
-  start(): void;
+  start(): Promise<void>;
   update(hands: TrackedHand[]): void;
   panic(): void;
   getAmplitude(): number;
   dispose(): void;
 }
 
-export default function App() {
+function AppInner() {
   const audioRef = useRef<AudioEngineAPI | null>(null);
-  const trackerRef = useRef<HandTracker | null>(null);
+  const { tracker, startTracking } = useHandTracker();
 
   // Create AudioEngine once
   useEffect(() => {
@@ -32,27 +28,41 @@ export default function App() {
     };
   }, []);
 
-  // Per-frame audio update loop (bridge hand data to audio)
+  // Per-frame audio update loop
   useEffect(() => {
     let rafId: number;
     function loop() {
-      if (audioRef.current && trackerRef.current) {
-        audioRef.current.update(trackerRef.current.hands);
+      if (audioRef.current && tracker) {
+        audioRef.current.update(tracker.hands);
       }
       rafId = requestAnimationFrame(loop);
     }
     loop();
     return () => cancelAnimationFrame(rafId);
-  }, []);
+  }, [tracker]);
+
+  // Combined start: webcam + audio (both need user gesture)
+  const handleStart = useCallback(async () => {
+    await startTracking();
+    await audioRef.current?.start();
+  }, [startTracking]);
 
   return (
     <>
       <Visualizer />
       <UIOverlay
-        onStartAudio={() => audioRef.current?.start()}
+        onStartAudio={handleStart}
         onPanic={() => audioRef.current?.panic()}
       />
       <AttractMode />
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <HandTrackerProvider>
+      <AppInner />
+    </HandTrackerProvider>
   );
 }

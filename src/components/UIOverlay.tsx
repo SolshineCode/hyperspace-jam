@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store/useAppStore';
 
 interface UIOverlayProps {
-  onStartAudio: () => void;
+  onStartAudio: () => void | Promise<void>;
   onPanic: () => void;
 }
 
