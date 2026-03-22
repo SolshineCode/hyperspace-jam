@@ -1,26 +1,6 @@
 /*
- * Poincaré Disk Hyperbolic Tessellation — {7,3} Heptagonal Tiling
- *
- * Algorithm: "Fold/Reflect" — for each pixel, iteratively reflect back to
- * the fundamental domain using Möbius translations. GPU-friendly pure ALU math.
- *
- * Uniforms:
- *   u_time: float       — elapsed time for animation
- *   u_amplitude: float   — master audio level from Tone.Meter (0.0-1.0)
- *   u_resolution: vec2   — viewport dimensions
- *
- * Audio reactivity:
- *   - Rotation speed increases with amplitude
- *   - Tessellation "breathes" (scales) with amplitude
- *   - Color saturation and edge glow respond to amplitude
- *
- * Performance: ~20 iterations per pixel, pure ALU, no texture fetches.
- * Easily 60fps at 1080p on any GPU from the last 5+ years.
- *
- * Reference implementations:
- *   - https://www.shadertoy.com/view/3llXR4 (Hyperbolic Truchet tiles)
- *   - https://www.shadertoy.com/view/ssd3zX (Movable Hyperbolic Tessellation)
- *   - https://github.com/felixbauckholt/hyperbolic_canvas
+ * Poincare Disk Hyperbolic Tessellation Shader
+ * {7,3} heptagonal tiling in the Poincare disk model.
  */
 
 precision highp float;
@@ -29,147 +9,119 @@ uniform float u_time;
 uniform float u_amplitude;
 uniform vec2 u_resolution;
 
-#define PI 3.14159265359
-#define ITER 20
-
-// ──── Complex number arithmetic (vec2 = x + iy) ────
-
+// Complex number operations for Mobius transforms
 vec2 cmul(vec2 a, vec2 b) {
-    return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
-}
-
-vec2 cconj(vec2 a) {
-    return vec2(a.x, -a.y);
+  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
 vec2 cdiv(vec2 a, vec2 b) {
-    return cmul(a, cconj(b)) / dot(b, b);
+  float d = dot(b, b);
+  return vec2(dot(a, b), a.y * b.x - a.x * b.y) / d;
 }
 
-vec2 cexp(vec2 a) {
-    return exp(a.x) * vec2(cos(a.y), sin(a.y));
+vec2 conj(vec2 z) {
+  return vec2(z.x, -z.y);
 }
 
-// ──── Hyperbolic geometry ────
-
-// Möbius translation: shifts point 'a' to origin within the Poincaré disk
-vec2 hypShift(vec2 z, vec2 a) {
-    return cdiv(z - a, vec2(1.0, 0.0) - cmul(cconj(a), z));
+// Mobius transformation: (z - a) / (1 - conj(a)*z)
+vec2 mobius(vec2 z, vec2 a) {
+  return cdiv(z - a, vec2(1.0, 0.0) - cmul(conj(a), z));
 }
 
-// ──── Tessellation: {P, Q} tiling ────
-// P = polygon sides, Q = polygons per vertex
-// Hyperbolic condition: (P-2)(Q-2) > 4
-
-const int P = 7;   // heptagons
-const int Q = 3;   // 3 per vertex
-
-// Fold into fundamental domain.
-// Returns: x = fold count (for coloring), y = distance from center (for edges)
-vec2 fold(vec2 z, float rotAngle) {
-    // Compute shift distance for {P, Q} tiling
-    float tanP = tan(PI / float(P));
-    float tanQ = tan(PI / 2.0 - PI / float(Q));
-    float d = sqrt((tanQ - tanP) / (tanQ + tanP));
-
-    // Rotation per polygon edge
-    vec2 rv = cexp(vec2(0.0, 2.0 * PI / float(P)));
-    // Shift vector (direction to adjacent tile center)
-    vec2 dv = vec2(d, 0.0);
-
-    // Apply global rotation (animated + audio-reactive)
-    z = cmul(z, cexp(vec2(0.0, rotAngle)));
-
-    float foldCount = 0.0;
-    int streak = 0;
-
-    for (int i = 0; i < ITER; i++) {
-        // Rotate shift direction to next edge
-        dv = cmul(dv, rv);
-        // Try shifting toward this neighbor
-        vec2 shifted = hypShift(z, dv);
-        if (dot(shifted, shifted) < dot(z, z)) {
-            // Closer to center — accept and negate (reflection)
-            z = -shifted;
-            foldCount += 1.0;
-            streak = 0;
-        } else {
-            streak++;
-            if (streak >= P) break; // converged to fundamental domain
-        }
-    }
-
-    return vec2(foldCount, length(z));
+// Hyperbolic distance from origin
+float hdist(vec2 z) {
+  float r = length(z);
+  if (r >= 1.0) return 10.0;
+  return log((1.0 + r) / (1.0 - r));
 }
 
-// ──── Color utilities ────
-
-vec3 hsv2rgb(vec3 c) {
-    vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0);
-    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+// Rotate a 2D point
+vec2 rot(vec2 p, float a) {
+  float c = cos(a), s = sin(a);
+  return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
-
-// ──── Main ────
 
 void main() {
-    // Map pixel to [-1, 1] with aspect correction
-    vec2 uv = (2.0 * gl_FragCoord.xy - u_resolution) / min(u_resolution.x, u_resolution.y);
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y);
 
-    // Audio-reactive breathing scale
-    float breathe = 1.0 + 0.12 * u_amplitude;
-    uv *= breathe;
+  // Breathing scale from audio amplitude
+  float breathe = 1.0 + 0.15 * u_amplitude;
+  uv *= 1.1 * breathe;
 
-    float r = length(uv);
+  float r = length(uv);
 
-    // Outside disk — black
-    if (r >= 1.0) {
-        gl_FragColor = vec4(vec3(0.0), 1.0);
-        return;
-    }
+  // Outside disk: black
+  if (r >= 1.0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
 
-    // Disk edge fade (avoids hard boundary)
-    float edgeFade = smoothstep(1.0, 0.95, r);
+  // Slow rotation
+  float rotSpeed = 0.08 + 0.05 * u_amplitude;
+  uv = rot(uv, u_time * rotSpeed);
 
-    // Animated rotation (slow base + audio boost)
-    float rotSpeed = 0.08 + 0.3 * u_amplitude;
-    float rotAngle = u_time * rotSpeed;
+  // Tessellation parameters for {7,3} tiling
+  float n = 7.0; // heptagon
+  float angleStep = 6.283185 / n;
 
-    // Fold into fundamental domain
-    vec2 result = fold(uv, rotAngle);
-    float foldCount = result.x;
-    float dist = result.y;
+  // Hyperbolic translation distance for {7,3}
+  float coshR = cos(3.14159265 / 3.0) / sin(3.14159265 / n);
+  float sinhR = sqrt(coshR * coshR - 1.0);
+  float tr = sinhR / (coshR + 1.0); // tanh(R/2) = translation in disk
 
-    // ──── Coloring ────
+  // Iteratively reflect into fundamental domain
+  vec2 z = uv;
+  float iter = 0.0;
 
-    // Hue: slow drift + fold-based variation + audio hue shift
-    float hue = fract(foldCount * 0.14 + u_time * 0.02 + u_amplitude * 0.08);
+  for (int i = 0; i < 40; i++) {
+    // Find nearest sector
+    float ang = atan(z.y, z.x);
+    float sector = floor(ang / angleStep + 0.5) * angleStep;
 
-    // Saturation: high for festival projection, boosted by audio
-    float sat = 0.8 + 0.15 * u_amplitude;
+    // Rotate to canonical sector
+    z = rot(z, -sector);
+    iter += abs(sector) > 0.01 ? 1.0 : 0.0;
 
-    // Value: parity-based contrast (alternating light/dark tiles)
-    float val = mod(foldCount, 2.0) < 1.0 ? 0.85 : 0.15;
+    // Translate toward center
+    vec2 center = vec2(tr, 0.0);
+    vec2 w = mobius(z, center);
 
-    // Edge detection: bright lines at tile boundaries
-    float tanP = tan(PI / float(P));
-    float tanQ = tan(PI / 2.0 - PI / float(Q));
-    float dCenter = sqrt((tanQ - tanP) / (tanQ + tanP));
-    float halfD = dCenter * 0.5;
+    if (length(w) >= length(z) - 0.0001) break;
+    z = w;
+    iter += 1.0;
+  }
 
-    float edgeDist = abs(dist - halfD);
-    float edgeLine = 1.0 - smoothstep(0.0, 0.04 + 0.02 * u_amplitude, edgeDist);
+  // Coloring based on iteration count and position
+  float d = hdist(z);
+  float edge = smoothstep(0.02, 0.06, abs(sin(d * 3.0)));
 
-    // Mix tile color with complementary edge glow
-    vec3 tileColor = hsv2rgb(vec3(hue, sat, val));
-    vec3 edgeColor = hsv2rgb(vec3(fract(hue + 0.5), 0.6, 1.0));
+  // Color palette: deep blues, teals, purples
+  float t = mod(iter * 0.1 + u_time * 0.02, 1.0);
+  vec3 col1 = vec3(0.02, 0.05, 0.15); // deep navy
+  vec3 col2 = vec3(0.05, 0.15, 0.25); // dark teal
+  vec3 col3 = vec3(0.1, 0.05, 0.2);   // purple
 
-    vec3 color = mix(tileColor, edgeColor, edgeLine * 0.7);
+  vec3 color = mix(col1, col2, sin(iter * 0.7 + u_time * 0.1) * 0.5 + 0.5);
+  color = mix(color, col3, sin(iter * 1.1 - u_time * 0.15) * 0.5 + 0.5);
 
-    // Apply disk edge fade
-    color *= edgeFade;
+  // Edge highlights
+  float edgeLine = 1.0 - smoothstep(0.0, 0.04, abs(fract(d * 1.5) - 0.5) - 0.45);
+  color += vec3(0.05, 0.1, 0.15) * edgeLine;
 
-    // Vignette darkening toward boundary
-    color *= mix(1.0, 0.3, pow(r, 4.0));
+  // Sector-based pattern
+  float ang = atan(z.y, z.x);
+  float sectorPattern = smoothstep(0.02, 0.04, abs(sin(ang * n * 0.5)));
+  color *= 0.7 + 0.3 * sectorPattern;
 
-    gl_FragColor = vec4(color, 1.0);
+  // Audio reactive brightness boost
+  color *= 0.8 + 0.2 * u_amplitude;
+
+  // Disk edge fade
+  float diskEdge = smoothstep(0.98, 0.92, r);
+  color *= diskEdge;
+
+  // Clamp to <= 1.0 so bloom doesn't pick up background
+  color = min(color, vec3(1.0));
+
+  gl_FragColor = vec4(color, 1.0);
 }
