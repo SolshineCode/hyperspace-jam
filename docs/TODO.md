@@ -1,113 +1,149 @@
 # Hyperspace Jam — Implementation TODO
 
+> Read `docs/RESEARCH.md` and `CLAUDE.md` BEFORE starting any step.
+
 ## Step 1: Scaffold & Dependencies ✅
 - [x] Initialize Vite+React+TS project
-- [x] Install all dependencies (@mediapipe/hands, tone, three, R3F, zustand, etc.)
+- [x] Install dependencies (@mediapipe/tasks-vision, tone, three, R3F, zustand, vite-plugin-glsl)
 - [x] Create folder structure (/components, /audio, /vision, /shaders, /store)
 - [x] Set up CLAUDE.md with architecture rules
 - [x] Create GitHub repo
+- [x] Research and document all library API patterns (RESEARCH.md)
+- [x] Write working Poincaré GLSL skeleton
+- [x] Implement ScaleQuantizer with full scale note generation
 
 ## Step 2: Global State & Vision Engine
-- [ ] **Zustand Store** (`src/store/useAppStore.ts`)
-  - [ ] `handsDetected: boolean`
-  - [ ] `audioStarted: boolean`
-  - [ ] `scaleMode: 'pentatonic' | 'mixolydian'`
-  - [ ] `attractMode: boolean`
-  - [ ] `webcamError: string | null`
-  - [ ] Actions: `setHandsDetected`, `setAudioStarted`, `toggleScale`, `setAttractMode`
+- [ ] **Zustand Store** (`src/store/useAppStore.ts`) — ALREADY IMPLEMENTED ✅
+  - [x] handsDetected, audioStarted, scaleMode, attractMode, webcamError
+  - [x] All action methods
 
 - [ ] **HandTracker** (`src/vision/HandTracker.ts`)
-  - [ ] Initialize MediaPipe Hands with `maxNumHands: 4`
-  - [ ] Set up webcam via `@mediapipe/camera_utils`
-  - [ ] Store landmarks in a mutable ref / event emitter (NOT React state)
-  - [ ] Export a `subscribe(callback)` pattern for consumers
-  - [ ] Compute triangle area from landmarks 4, 8, 20
+  - [ ] `async init(videoElement)`: FilesetResolver + HandLandmarker.createFromOptions
+  - [ ] `start()`: rAF loop calling detectForVideo(), writing to this.hands
+  - [ ] `stop()`: cancel rAF
+  - [ ] `async dispose()`: handLandmarker.close()
+  - [ ] Triangle area computation using cross product (helper already written)
+  - [ ] Subscriber notification in detection loop
 
-- [ ] **Auto-Recovery Logic**
-  - [ ] Detect webcam disconnect/error events
-  - [ ] Implement 5-second retry interval
-  - [ ] Max 5 retries before showing UI error
-  - [ ] Log all reconnect attempts to console
+- [ ] **Auto-Recovery Logic** (inside HandTracker)
+  - [ ] Catch webcam stream errors (track `ended` event on MediaStreamTrack)
+  - [ ] On error: stop detection loop, wait 5s, call getUserMedia again
+  - [ ] Increment retryCount. After 5 failures, call setWebcamError on zustand store
+  - [ ] On successful reconnect, reset retryCount to 0
 
 - [ ] **React Integration** (`src/components/HandTrackerProvider.tsx`)
-  - [ ] Wrap HandTracker in a component that manages lifecycle
-  - [ ] Bridge discrete events (hands detected yes/no) to zustand
-  - [ ] Expose landmark ref for Visualizer consumption
+  - [ ] Create <video> element (hidden) for webcam feed
+  - [ ] Instantiate HandTracker in useEffect, init + start
+  - [ ] Bridge discrete events to zustand (hands detected yes/no)
+  - [ ] Store HandTracker instance in useRef for Visualizer to access
+  - [ ] Expose via React context so Visualizer and AudioEngine can read hands
+  - [ ] Cleanup: stop + dispose on unmount
 
 ## Step 3: Audio Architecture
 - [ ] **AudioEngine** (`src/audio/AudioEngine.ts`)
-  - [ ] Master Bus: `Tone.Compressor` → `Tone.Limiter(-2)` → `Tone.getDestination()`
-  - [ ] `Tone.Meter` on master bus for visual feedback
-  - [ ] `start()` method (must be called from user gesture)
-  - [ ] `update(landmarks)` method (called per frame)
-  - [ ] `panic()` method (kill all, dispose, rebuild)
-  - [ ] `dispose()` method for cleanup
+  - [ ] `async start()`: Tone.start() + build master bus chain
+  - [ ] Master Bus: Compressor → Limiter(-2dB) → getDestination()
+  - [ ] Meter: Tone.Meter({ normalRange: true }) connected to limiter output
+  - [ ] `update(hands)`: Called per frame — map hand data to instrument params
+  - [ ] `panic()`: Stop transport, triggerRelease all, dispose all, rebuild
+  - [ ] `getAmplitude()`: return meter.getValue() as number
+  - [ ] `dispose()`: Full cleanup of all Tone nodes
 
-- [ ] **Instruments**
-  - [ ] Voice 1: `Tone.PluckSynth` — filter cutoff mapped to triangle area
-  - [ ] Voice 2: 909 Drum Kit — use `Tone.MembraneSynth` + `Tone.NoiseSynth` — distortion mapped to triangle area
-  - [ ] Voice 3: `Tone.Synth` (sine wave sub-bass) — LFO rate mapped to triangle area
+- [ ] **Voice 1: Pluck Synth**
+  - [ ] Tone.PluckSynth → toDestination()
+  - [ ] Dampening (filter cutoff) mapped to hand 0's triangle area
+  - [ ] Pitch from hand 0's index finger Y, quantized through ScaleQuantizer
+  - [ ] Trigger on hand presence, release on absence
 
-- [ ] **Scale Quantizer** (`src/audio/ScaleQuantizer.ts`)
-  - [ ] C Minor Pentatonic intervals: [0, 3, 5, 7, 10]
-  - [ ] C Mixolydian intervals: [0, 2, 4, 5, 7, 9, 10]
-  - [ ] `quantize(value: number, scale: Scale): number` → MIDI note
-  - [ ] Map input range (0-1 from hand Y position) to note range (C3-C5)
+- [ ] **Voice 2: 909 Drum Kit**
+  - [ ] Kick: MembraneSynth (pitchDecay:0.05, octaves:10)
+  - [ ] Snare: MembraneSynth + NoiseSynth layered
+  - [ ] Hi-hat: MetalSynth (harmonicity:5.1)
+  - [ ] Distortion amount mapped to hand 1's triangle area
+  - [ ] Trigger pattern based on hand gestures / position zones
+
+- [ ] **Voice 3: Sub-Bass**
+  - [ ] Tone.Synth({ oscillator: { type: "sine" } })
+  - [ ] LFO rate mapped to triangle area
+  - [ ] Low pitch range (C1-C2)
 
 - [ ] **Panic Button**
-  - [ ] Spacebar listener (global keydown)
-  - [ ] Calls `AudioEngine.panic()`
-  - [ ] Visual feedback: brief red flash on UI
+  - [ ] Global keydown listener for Spacebar
+  - [ ] Calls AudioEngine.panic()
+  - [ ] Visual feedback via zustand state (brief flash)
+  - [ ] Remove listener on cleanup
+
+- [ ] **Scale Toggle Integration**
+  - [ ] Read scaleMode from zustand in update()
+  - [ ] Pass to ScaleQuantizer.quantize()
 
 ## Step 4: Hyperbolic Visuals
-- [ ] **Visualizer** (`src/components/Visualizer.tsx`)
-  - [ ] R3F Canvas with Orthographic camera
-  - [ ] `useFrame` loop: read landmark ref, update triangle geometry
-  - [ ] Render up to 4 neon triangles (landmarks 4, 8, 20 per hand)
-  - [ ] Emissive material with high intensity
-  - [ ] Bloom postprocessing (EffectComposer + Bloom)
+- [ ] **Visualizer Canvas** (`src/components/Visualizer.tsx`)
+  - [ ] R3F Canvas: orthographic, zoom:1, antialias:false
+  - [ ] Compose: HyperbolicBackground + NeonTriangles + EffectComposer
 
-- [ ] **Triangle Geometry** (`src/components/NeonTriangle.tsx`)
-  - [ ] TubeGeometry or custom Line geometry
-  - [ ] Color per hand (hand 0=cyan, 1=magenta, 2=yellow, 3=lime)
-  - [ ] Smooth interpolation (lerp) to avoid jitter
+- [ ] **HyperbolicBackground** (`src/components/HyperbolicBackground.tsx`)
+  - [ ] drei shaderMaterial with PoincareMaterial
+  - [ ] Import fragment shader from ../shaders/Poincare.glsl
+  - [ ] Vertex shader: passthrough (gl_Position = vec4(position.xy, 0, 1))
+  - [ ] Fullscreen plane: <planeGeometry args={[2,2]} />, renderOrder={-1}
+  - [ ] depthWrite=false, depthTest=false, toneMapped=false
+  - [ ] useFrame: update u_time, u_amplitude, u_resolution
+  - [ ] TypeScript: ThreeElement<typeof PoincareMaterial> module augmentation
 
-- [ ] **Poincaré Shader** (`src/shaders/Poincare.glsl`)
-  - [ ] Vertex shader: fullscreen quad pass-through
-  - [ ] Fragment shader: hyperbolic tessellation in Poincaré disk model
-  - [ ] Uniforms: `u_time`, `u_amplitude`, `u_resolution`
-  - [ ] Audio-reactive warping: amplitude modulates tessellation scale/rotation
-  - [ ] High contrast colors suitable for projection
+- [ ] **NeonTriangle** (`src/components/NeonTriangle.tsx`)
+  - [ ] Props: 3 Vector3 points + color
+  - [ ] CatmullRomCurve3 path (closed=true)
+  - [ ] TubeGeometry: 64 segments, 0.015 radius, 8 radial segments
+  - [ ] meshBasicMaterial: color values > 1.0, toneMapped=false
+  - [ ] Lerp positions between frames for smoothness
 
-- [ ] **Background Plane** (`src/components/HyperbolicBackground.tsx`)
-  - [ ] Fullscreen plane with custom shaderMaterial
-  - [ ] `useFrame`: update `u_time` and `u_amplitude` uniforms
-  - [ ] Read amplitude from Tone.Meter
+- [ ] **NeonTriangles container** (`src/components/NeonTriangles.tsx`)
+  - [ ] Read HandTracker.hands ref in useFrame
+  - [ ] Render 0-4 NeonTriangle components
+  - [ ] Color mapping: hand 0=cyan, 1=magenta, 2=yellow, 3=lime
+  - [ ] Convert landmark coordinates (0-1) to world space
+
+- [ ] **Postprocessing**
+  - [ ] EffectComposer: disableNormalPass, multisampling=0
+  - [ ] Bloom: luminanceThreshold=1, intensity=1.5, mipmapBlur
+  - [ ] ToneMapping: ACES_FILMIC mode — **MUST BE LAST EFFECT**
+
+- [ ] **Audio-Reactive Bridge**
+  - [ ] useRef<number> for amplitude value
+  - [ ] Read Tone.Meter in useFrame, update ref
+  - [ ] Pass ref to HyperbolicBackground for shader uniform
 
 ## Step 5: Kiosk UI & Deployment
 - [ ] **UI Overlay** (`src/components/UIOverlay.tsx`)
-  - [ ] Full-screen, pointer-events-none overlay (except interactive elements)
-  - [ ] Scale mode toggle button (Pentatonic / Mixolydian)
-  - [ ] Webcam status indicator
+  - [ ] Full-screen overlay: position:fixed, pointer-events:none (except buttons)
+  - [ ] "Click to Start Audio" button (Tone.start requires user gesture)
+  - [ ] Scale mode toggle: "Pentatonic" / "Mixolydian" button
+  - [ ] Webcam status indicator (green/red dot + error message)
   - [ ] Audio status indicator
-  - [ ] "Click to Start Audio" prompt (required for Tone.js)
+  - [ ] High contrast styling for projection readability
 
 - [ ] **Attract Mode** (`src/components/AttractMode.tsx`)
-  - [ ] 30-second inactivity timer (no hands detected)
-  - [ ] Pulsing "STEP UP TO PLAY" text (CSS animation)
-  - [ ] Shader continues with gentle sine-wave amplitude
-  - [ ] Instant dismiss on hand detection
+  - [ ] 30-second timer starts when handsDetected goes false
+  - [ ] Timer resets when handsDetected goes true
+  - [ ] On timeout: set attractMode=true in zustand
+  - [ ] Pulsing "STEP UP TO PLAY" text (CSS animation, large font)
+  - [ ] Background shader receives gentle sine-wave amplitude in attract mode
+  - [ ] Instant dismiss: attractMode=false when hands detected
 
-- [ ] **README.md for Hugging Face**
-  - [ ] YAML frontmatter: `title`, `emoji`, `colorFrom`, `colorTo`, `sdk: static`, `pinned: false`
-  - [ ] Project description and usage instructions
-  - [ ] Build instructions
+- [ ] **App Composition** (`src/App.tsx`)
+  - [ ] HandTrackerProvider wraps everything
+  - [ ] Visualizer (full screen, behind overlay)
+  - [ ] UIOverlay (on top)
+  - [ ] AttractMode (conditional on zustand attractMode)
 
 - [ ] **Final Polish**
+  - [ ] Strip default Vite CSS/assets (App.css, index.css, logos)
+  - [ ] Fullscreen body/html styles (margin:0, overflow:hidden, bg:black)
   - [ ] Test with 0, 1, 2, 3, 4 hands
   - [ ] Test webcam disconnect/reconnect
-  - [ ] Test panic button
+  - [ ] Test panic button (spacebar)
   - [ ] Test scale toggle
-  - [ ] Test attract mode timing
-  - [ ] Verify production build works
+  - [ ] Test attract mode timing (30s)
+  - [ ] Verify production build: `npm run build && npm run preview`
   - [ ] Deploy to Hugging Face Spaces

@@ -1,16 +1,20 @@
 /**
- * HandTracker — MediaPipe Hands integration with auto-recovery.
+ * HandTracker — MediaPipe Tasks Vision HandLandmarker with auto-recovery.
  *
- * Writes landmark data to a mutable object (NOT React state) for 60fps consumption.
- * Consumers read from HandTracker.landmarks directly in their animation loops.
- *
- * TODO: Implement in Step 2
- * - Initialize @mediapipe/hands with maxNumHands: 4
- * - Set up webcam via @mediapipe/camera_utils
- * - Store landmarks in a mutable ref
- * - Compute triangle area from landmarks 4, 8, 20
- * - Auto-reconnect on webcam disconnect (5s interval, max 5 retries)
+ * Writes landmark data to a mutable array (NOT React state) for 60fps consumption.
+ * Consumers read from HandTracker.hands directly in their animation loops.
  */
+
+// Dynamic CDN import — avoids @mediapipe/tasks-vision's broken npm exports map
+// and works reliably in HF Spaces iframes (same approach as award-winning arpeggiator Space)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _mediapipe: any = null;
+
+async function loadMediaPipe() {
+  if (_mediapipe) return _mediapipe;
+  _mediapipe = await import(/* @vite-ignore */ "https://esm.sh/@mediapipe/tasks-vision@0.10.14");
+  return _mediapipe;
+}
 
 export interface HandLandmark {
   x: number;
@@ -25,11 +29,22 @@ export interface TrackedHand {
 
 export type LandmarkSubscriber = (hands: TrackedHand[]) => void;
 
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 5000;
+
 export class HandTracker {
   /** Current frame's tracked hands — read this in useFrame, do NOT subscribe via React state */
   public hands: TrackedHand[] = [];
 
   private subscribers: LandmarkSubscriber[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private handLandmarker: any = null;
+  private video: HTMLVideoElement | null = null;
+  private rafId: number | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryCount = 0;
+  private running = false;
+  private onError: ((msg: string) => void) | null = null;
 
   subscribe(callback: LandmarkSubscriber): () => void {
     this.subscribers.push(callback);
@@ -38,5 +53,174 @@ export class HandTracker {
     };
   }
 
-  // TODO: init(), start(), stop(), dispose() methods
+  setErrorHandler(handler: (msg: string) => void): void {
+    this.onError = handler;
+  }
+
+  async init(videoElement: HTMLVideoElement): Promise<void> {
+    this.video = videoElement;
+
+    const { FilesetResolver, HandLandmarker } = await loadMediaPipe();
+
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+
+    this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU",
+      },
+      numHands: 4,
+      runningMode: "VIDEO",
+      minHandDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    // Watch for webcam disconnects
+    const tracks = videoElement.srcObject instanceof MediaStream
+      ? videoElement.srcObject.getVideoTracks()
+      : [];
+    for (const track of tracks) {
+      track.addEventListener("ended", () => {
+        console.warn("[HandTracker] MediaStreamTrack ended — attempting recovery");
+        this.handleDisconnect();
+      });
+    }
+  }
+
+  start(): void {
+    if (!this.handLandmarker || !this.video) {
+      console.error("[HandTracker] Not initialized — call init() first");
+      return;
+    }
+    this.running = true;
+    this.retryCount = 0;
+    this.detect();
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.stop();
+    if (this.handLandmarker) {
+      this.handLandmarker.close();
+      this.handLandmarker = null;
+    }
+    this.video = null;
+    this.hands = [];
+    this.subscribers = [];
+  }
+
+  // --- Private ---
+
+  private detect = (): void => {
+    if (!this.running || !this.handLandmarker || !this.video) return;
+
+    if (this.video.readyState >= 2) {
+      const results = this.handLandmarker.detectForVideo(
+        this.video,
+        performance.now()
+      );
+
+      const newHands: TrackedHand[] = [];
+      if (results.landmarks) {
+        for (const handLandmarks of results.landmarks) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const landmarks: HandLandmark[] = handLandmarks.map((lm: any) => ({
+            x: lm.x,
+            y: lm.y,
+            z: lm.z,
+          }));
+          const triangleArea = computeTriangleArea(
+            landmarks[4]!,
+            landmarks[8]!,
+            landmarks[20]!
+          );
+          newHands.push({ landmarks, triangleArea });
+        }
+      }
+
+      this.hands = newHands;
+      this.notifySubscribers();
+    }
+
+    this.rafId = requestAnimationFrame(this.detect);
+  };
+
+  private notifySubscribers(): void {
+    for (const cb of this.subscribers) {
+      cb(this.hands);
+    }
+  }
+
+  private handleDisconnect(): void {
+    this.stop();
+    this.retryCount = 0;
+    this.attemptRecovery();
+  }
+
+  private attemptRecovery(): void {
+    if (this.retryCount >= MAX_RETRIES) {
+      const msg = `Webcam recovery failed after ${MAX_RETRIES} attempts`;
+      console.error(`[HandTracker] ${msg}`);
+      this.onError?.(msg);
+      return;
+    }
+
+    this.retryCount++;
+    console.log(
+      `[HandTracker] Recovery attempt ${this.retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_MS / 1000}s...`
+    );
+
+    this.retryTimer = setTimeout(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: 640, height: 480 },
+        });
+
+        if (this.video) {
+          this.video.srcObject = stream;
+          await this.video.play();
+
+          // Re-attach track ended listener
+          for (const track of stream.getVideoTracks()) {
+            track.addEventListener("ended", () => {
+              console.warn("[HandTracker] MediaStreamTrack ended — attempting recovery");
+              this.handleDisconnect();
+            });
+          }
+
+          this.running = true;
+          this.detect();
+          console.log("[HandTracker] Recovery successful");
+        }
+      } catch (err) {
+        console.error("[HandTracker] Recovery attempt failed:", err);
+        this.attemptRecovery();
+      }
+    }, RETRY_DELAY_MS);
+  }
+}
+
+/** Compute area of triangle using the cross-product method (2D, ignoring z). */
+function computeTriangleArea(
+  a: HandLandmark,
+  b: HandLandmark,
+  c: HandLandmark
+): number {
+  return Math.abs(
+    (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2
+  );
 }
